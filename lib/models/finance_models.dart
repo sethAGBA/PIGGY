@@ -60,6 +60,32 @@ class TransactionItem {
   final String description;
 }
 
+class DebtItem {
+  DebtItem({
+    required this.id,
+    required this.name,
+    required this.type,
+    required this.totalAmount,
+    required this.remainingAmount,
+    required this.accountId,
+    required this.createdAt,
+    required this.dueDate,
+    required this.note,
+    required this.status,
+  });
+
+  final int id;
+  final String name;
+  final String type;
+  final double totalAmount;
+  final double remainingAmount;
+  final int accountId;
+  final DateTime createdAt;
+  final DateTime? dueDate;
+  final String? note;
+  final String status;
+}
+
 class BudgetItem {
   BudgetItem({
     required this.id,

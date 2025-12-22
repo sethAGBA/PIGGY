@@ -10,6 +10,7 @@ class FinanceSnapshot {
     required this.accounts,
     required this.transactions,
     required this.budgets,
+    required this.debts,
     required this.goals,
   });
 
@@ -17,6 +18,7 @@ class FinanceSnapshot {
   final List<AccountItem> accounts;
   final List<TransactionItem> transactions;
   final List<BudgetItem> budgets;
+  final List<DebtItem> debts;
   final List<GoalItem> goals;
 }
 
@@ -35,12 +37,14 @@ class FinanceRepository {
     final accountsRows = await db.query('comptes', where: 'actif = 1', orderBy: 'id ASC');
     final transactionsRows = await db.query('transactions', orderBy: 'date_transaction DESC');
     final budgetsRows = await db.query('budgets', orderBy: 'id ASC');
+    final debtsRows = await db.query('dettes', orderBy: 'date_creation DESC');
     final goalsRows = await db.query('objectifs_epargne', orderBy: 'id ASC');
 
     final categories = categoriesRows.map(_categoryFromRow).toList();
     final accounts = accountsRows.map(_accountFromRow).toList();
     final transactions = transactionsRows.map(_transactionFromRow).toList();
     final budgets = budgetsRows.map((row) => _budgetFromRow(row, transactions)).toList();
+    final debts = debtsRows.map(_debtFromRow).toList();
     final goals = goalsRows.map(_goalFromRow).toList();
 
     return FinanceSnapshot(
@@ -48,6 +52,7 @@ class FinanceRepository {
       accounts: accounts,
       transactions: transactions,
       budgets: budgets,
+      debts: debts,
       goals: goals,
     );
   }
@@ -188,6 +193,107 @@ class FinanceRepository {
     await db.delete('budgets', where: 'id = ?', whereArgs: [id]);
   }
 
+  Future<int> createDebt(DebtItem debt) async {
+    final db = await _database.database;
+    return db.insert('dettes', {
+      'utilisateur_id': 1,
+      'compte_id': debt.accountId,
+      'nom': debt.name,
+      'type': debt.type,
+      'montant_initial': debt.totalAmount,
+      'solde_restant': debt.remainingAmount,
+      'date_creation': debt.createdAt.toIso8601String(),
+      'date_echeance': debt.dueDate?.toIso8601String(),
+      'note': debt.note,
+      'statut': debt.status,
+      'actif': 1,
+    });
+  }
+
+  Future<void> updateDebt(DebtItem debt) async {
+    final db = await _database.database;
+    await db.update(
+      'dettes',
+      {
+        'compte_id': debt.accountId,
+        'nom': debt.name,
+        'type': debt.type,
+        'montant_initial': debt.totalAmount,
+        'solde_restant': debt.remainingAmount,
+        'date_echeance': debt.dueDate?.toIso8601String(),
+        'note': debt.note,
+        'statut': debt.status,
+      },
+      where: 'id = ?',
+      whereArgs: [debt.id],
+    );
+  }
+
+  Future<void> deleteDebt(int id) async {
+    final db = await _database.database;
+    final count = Sqflite.firstIntValue(await db.rawQuery(
+      'SELECT COUNT(1) FROM paiements_dettes WHERE dette_id = ?',
+      [id],
+    ));
+    if ((count ?? 0) > 0) {
+      throw StateError('DETTE_UTILISEE');
+    }
+    await db.delete('dettes', where: 'id = ?', whereArgs: [id]);
+  }
+
+  Future<void> recordDebtPayment({
+    required DebtItem debt,
+    required double amount,
+    required int categoryId,
+    required int accountId,
+    required DateTime date,
+    String? description,
+  }) async {
+    final db = await _database.database;
+    final payment = amount.abs();
+    final isReceivable = debt.type == 'owed_to_me';
+    final signedAmount = isReceivable ? payment : -payment;
+    final transactionType = isReceivable ? 'income' : 'expense';
+    final nextRemaining = debt.remainingAmount - payment;
+    final updatedRemaining = nextRemaining < 0 ? 0.0 : nextRemaining;
+    final status = updatedRemaining <= 0 ? 'soldee' : 'en_cours';
+
+    await db.transaction((txn) async {
+      final transactionId = await txn.insert('transactions', {
+        'utilisateur_id': 1,
+        'compte_id': accountId,
+        'categorie_id': categoryId,
+        'type': transactionType,
+        'montant': signedAmount,
+        'libelle': description ?? 'Remboursement ${debt.name}',
+        'description': description ?? 'Remboursement ${debt.name}',
+        'date_transaction': date.toIso8601String(),
+      });
+
+      await txn.rawUpdate(
+        'UPDATE comptes SET solde_actuel = solde_actuel + ?, date_modification = CURRENT_TIMESTAMP WHERE id = ?',
+        [signedAmount, accountId],
+      );
+
+      await txn.update(
+        'dettes',
+        {
+          'solde_restant': updatedRemaining,
+          'statut': status,
+        },
+        where: 'id = ?',
+        whereArgs: [debt.id],
+      );
+
+      await txn.insert('paiements_dettes', {
+        'dette_id': debt.id,
+        'transaction_id': transactionId,
+        'montant': payment,
+        'date_paiement': date.toIso8601String(),
+      });
+    });
+  }
+
   Future<int> createTransaction(TransactionItem transaction) async {
     final db = await _database.database;
     return db.transaction<int>((txn) async {
@@ -211,31 +317,157 @@ class FinanceRepository {
 
   Future<void> updateTransaction(TransactionItem transaction) async {
     final db = await _database.database;
-    await db.update(
-      'transactions',
-      {
-        'compte_id': transaction.accountId,
-        'categorie_id': transaction.categoryId,
-        'type': transaction.type,
-        'montant': transaction.amount,
-        'libelle': transaction.description,
-        'description': transaction.description,
-        'date_transaction': transaction.date.toIso8601String(),
-        'date_modification': DateTime.now().toIso8601String(),
-      },
-      where: 'id = ?',
-      whereArgs: [transaction.id],
-    );
+    await db.transaction((txn) async {
+      final existingRows = await txn.query(
+        'transactions',
+        columns: ['compte_id', 'montant'],
+        where: 'id = ?',
+        whereArgs: [transaction.id],
+        limit: 1,
+      );
+
+      await txn.update(
+        'transactions',
+        {
+          'compte_id': transaction.accountId,
+          'categorie_id': transaction.categoryId,
+          'type': transaction.type,
+          'montant': transaction.amount,
+          'libelle': transaction.description,
+          'description': transaction.description,
+          'date_transaction': transaction.date.toIso8601String(),
+          'date_modification': DateTime.now().toIso8601String(),
+        },
+        where: 'id = ?',
+        whereArgs: [transaction.id],
+      );
+
+      if (existingRows.isEmpty) {
+        return;
+      }
+
+      final oldAccountId = (existingRows.first['compte_id'] as int?) ?? transaction.accountId;
+      final oldAmount = (existingRows.first['montant'] as num?)?.toDouble() ?? 0;
+
+      if (oldAccountId == transaction.accountId) {
+        final delta = transaction.amount - oldAmount;
+        if (delta != 0) {
+          await txn.rawUpdate(
+            'UPDATE comptes SET solde_actuel = solde_actuel + ?, date_modification = CURRENT_TIMESTAMP WHERE id = ?',
+            [delta, transaction.accountId],
+          );
+        }
+      } else {
+        await txn.rawUpdate(
+          'UPDATE comptes SET solde_actuel = solde_actuel - ?, date_modification = CURRENT_TIMESTAMP WHERE id = ?',
+          [oldAmount, oldAccountId],
+        );
+        await txn.rawUpdate(
+          'UPDATE comptes SET solde_actuel = solde_actuel + ?, date_modification = CURRENT_TIMESTAMP WHERE id = ?',
+          [transaction.amount, transaction.accountId],
+        );
+      }
+
+      final debtPaymentRows = await txn.query(
+        'paiements_dettes',
+        columns: ['id', 'dette_id', 'montant'],
+        where: 'transaction_id = ?',
+        whereArgs: [transaction.id],
+        limit: 1,
+      );
+
+      if (debtPaymentRows.isEmpty) {
+        return;
+      }
+
+      final paymentId = (debtPaymentRows.first['id'] as int?) ?? 0;
+      final debtId = (debtPaymentRows.first['dette_id'] as int?) ?? 0;
+      final oldPayment = (debtPaymentRows.first['montant'] as num?)?.toDouble() ?? 0;
+      final newPayment = transaction.amount.abs();
+      final deltaPayment = newPayment - oldPayment;
+
+      if (deltaPayment != 0) {
+        final debtRows = await txn.query(
+          'dettes',
+          columns: ['solde_restant'],
+          where: 'id = ?',
+          whereArgs: [debtId],
+          limit: 1,
+        );
+        if (debtRows.isNotEmpty) {
+          final currentRemaining = (debtRows.first['solde_restant'] as num?)?.toDouble() ?? 0;
+          final updatedRemaining = currentRemaining - deltaPayment;
+          final normalizedRemaining = updatedRemaining < 0 ? 0.0 : updatedRemaining;
+          await txn.update(
+            'dettes',
+            {
+              'solde_restant': normalizedRemaining,
+              'statut': normalizedRemaining <= 0 ? 'soldee' : 'en_cours',
+            },
+            where: 'id = ?',
+            whereArgs: [debtId],
+          );
+        }
+      }
+
+      await txn.update(
+        'paiements_dettes',
+        {
+          'montant': newPayment,
+          'date_paiement': transaction.date.toIso8601String(),
+        },
+        where: 'id = ?',
+        whereArgs: [paymentId],
+      );
+    });
   }
 
   Future<void> deleteTransaction(TransactionItem transaction) async {
     final db = await _database.database;
     await db.transaction((txn) async {
+      final debtPaymentRows = await txn.query(
+        'paiements_dettes',
+        columns: ['id', 'dette_id', 'montant'],
+        where: 'transaction_id = ?',
+        whereArgs: [transaction.id],
+        limit: 1,
+      );
       await txn.delete('transactions', where: 'id = ?', whereArgs: [transaction.id]);
       await txn.rawUpdate(
         'UPDATE comptes SET solde_actuel = solde_actuel - ?, date_modification = CURRENT_TIMESTAMP WHERE id = ?',
         [transaction.amount, transaction.accountId],
       );
+
+      if (debtPaymentRows.isEmpty) {
+        return;
+      }
+
+      final paymentId = (debtPaymentRows.first['id'] as int?) ?? 0;
+      final debtId = (debtPaymentRows.first['dette_id'] as int?) ?? 0;
+      final paymentAmount = (debtPaymentRows.first['montant'] as num?)?.toDouble() ?? 0;
+
+      await txn.delete('paiements_dettes', where: 'id = ?', whereArgs: [paymentId]);
+
+      final debtRows = await txn.query(
+        'dettes',
+        columns: ['solde_restant'],
+        where: 'id = ?',
+        whereArgs: [debtId],
+        limit: 1,
+      );
+      if (debtRows.isNotEmpty) {
+        final currentRemaining = (debtRows.first['solde_restant'] as num?)?.toDouble() ?? 0;
+        final updatedRemaining = currentRemaining + paymentAmount;
+        await txn.update(
+          'dettes',
+          {
+            'solde_restant': updatedRemaining,
+            'statut': updatedRemaining <= 0 ? 'soldee' : 'en_cours',
+          },
+          where: 'id = ?',
+          whereArgs: [debtId],
+        );
+      }
     });
   }
 
@@ -267,6 +499,21 @@ class FinanceRepository {
       accountId: (row['compte_id'] as int?) ?? 0,
       date: _parseDate(row['date_transaction']),
       description: (row['description'] as String?) ?? (row['libelle'] as String?) ?? 'Transaction',
+    );
+  }
+
+  DebtItem _debtFromRow(Map<String, Object?> row) {
+    return DebtItem(
+      id: (row['id'] as int?) ?? 0,
+      name: (row['nom'] as String?) ?? '',
+      type: (row['type'] as String?) ?? 'owed_to_me',
+      totalAmount: (row['montant_initial'] as num?)?.toDouble() ?? 0,
+      remainingAmount: (row['solde_restant'] as num?)?.toDouble() ?? 0,
+      accountId: (row['compte_id'] as int?) ?? 0,
+      createdAt: _parseDate(row['date_creation']),
+      dueDate: row['date_echeance'] == null ? null : _parseDate(row['date_echeance']),
+      note: row['note'] as String?,
+      status: (row['statut'] as String?) ?? 'en_cours',
     );
   }
 

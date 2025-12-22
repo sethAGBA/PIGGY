@@ -30,6 +30,16 @@ class ReportsScreen extends StatelessWidget {
         ),
         const SizedBox(height: 16),
         sectionCard(
+          title: 'Dettes',
+          child: Column(
+            children: [
+              reportRow('Avoir', controller.totalReceivables, const Color(0xFF0EA5E9)),
+              reportRow('Doit', -controller.totalPayables, const Color(0xFFF97316)),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        sectionCard(
           title: 'Mes comptes',
           child: Column(children: controller.accounts.map(accountRow).toList()),
         ),

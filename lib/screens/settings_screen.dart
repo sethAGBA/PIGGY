@@ -5,6 +5,7 @@ import '../screens/screen_helpers.dart';
 import 'manage_accounts_screen.dart';
 import 'manage_budgets_screen.dart';
 import 'manage_categories_screen.dart';
+import 'manage_debts_screen.dart';
 import 'manage_transactions_screen.dart';
 
 class SettingsScreen extends StatelessWidget {
@@ -52,6 +53,12 @@ class SettingsScreen extends StatelessWidget {
                 icon: Icons.receipt_long,
                 label: 'Transactions',
                 onTap: () => _openScreen(context, ManageTransactionsScreen(controller: controller)),
+              ),
+              _navRow(
+                context,
+                icon: Icons.swap_horiz,
+                label: 'Dettes',
+                onTap: () => _openScreen(context, ManageDebtsScreen(controller: controller)),
               ),
             ],
           ),

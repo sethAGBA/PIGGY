@@ -31,3 +31,13 @@
 ## Configuration & Assets
 - Register new assets or fonts in `pubspec.yaml` under `flutter:`.
 - Keep platform-specific configuration in the respective platform directories.
+
+
+
+echo "# PIGGY" >> README.md
+git init
+git add README.md
+git commit -m "first commit"
+git branch -M main
+git remote add origin https://github.com/sethAGBA/PIGGY.git
+git push -u origin main

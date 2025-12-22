@@ -17,6 +17,7 @@ class FinanceController extends ChangeNotifier {
   final List<AccountItem> _accounts = [];
   final List<CategoryItem> _categories = [];
   final List<BudgetItem> _budgets = [];
+  final List<DebtItem> _debts = [];
   final List<GoalItem> _goals = [];
   final List<MonthlyTrend> _last6Months = [];
 
@@ -26,10 +27,15 @@ class FinanceController extends ChangeNotifier {
   List<AccountItem> get accounts => List.unmodifiable(_accounts);
   List<CategoryItem> get categories => List.unmodifiable(_categories);
   List<BudgetItem> get budgets => List.unmodifiable(_budgets);
+  List<DebtItem> get debts => List.unmodifiable(_debts);
   List<GoalItem> get goals => List.unmodifiable(_goals);
   List<MonthlyTrend> get last6Months => List.unmodifiable(_last6Months);
 
   double get totalBalance => _accounts.fold(0, (sum, acc) => sum + acc.balance);
+  double get totalReceivables =>
+      _debts.where((d) => d.type == 'owed_to_me').fold(0.0, (sum, d) => sum + d.remainingAmount);
+  double get totalPayables =>
+      _debts.where((d) => d.type == 'i_owe').fold(0.0, (sum, d) => sum + d.remainingAmount);
 
   double get monthlyIncome {
     final now = DateTime.now();
@@ -127,6 +133,44 @@ class FinanceController extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> createDebt(DebtItem debt) async {
+    await _repository.createDebt(debt);
+    await _loadSnapshot();
+    notifyListeners();
+  }
+
+  Future<void> updateDebt(DebtItem debt) async {
+    await _repository.updateDebt(debt);
+    await _loadSnapshot();
+    notifyListeners();
+  }
+
+  Future<void> deleteDebt(int id) async {
+    await _repository.deleteDebt(id);
+    await _loadSnapshot();
+    notifyListeners();
+  }
+
+  Future<void> recordDebtPayment({
+    required DebtItem debt,
+    required double amount,
+    required int categoryId,
+    required int accountId,
+    required DateTime date,
+    String? description,
+  }) async {
+    await _repository.recordDebtPayment(
+      debt: debt,
+      amount: amount,
+      categoryId: categoryId,
+      accountId: accountId,
+      date: date,
+      description: description,
+    );
+    await _loadSnapshot();
+    notifyListeners();
+  }
+
   Future<void> createTransaction(TransactionItem transaction) async {
     await _repository.createTransaction(transaction);
     await _loadSnapshot();
@@ -168,6 +212,9 @@ class FinanceController extends ChangeNotifier {
     _budgets
       ..clear()
       ..addAll(snapshot.budgets);
+    _debts
+      ..clear()
+      ..addAll(snapshot.debts);
     _goals
       ..clear()
       ..addAll(snapshot.goals);

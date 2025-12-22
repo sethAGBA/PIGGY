@@ -6,7 +6,7 @@ class AppDatabase {
 
   static final AppDatabase instance = AppDatabase._();
   static const _dbName = 'piggy.db';
-  static const _dbVersion = 2;
+  static const _dbVersion = 3;
 
   Database? _database;
 
@@ -213,6 +213,38 @@ class AppDatabase {
     ''');
 
     await db.execute('''
+      CREATE TABLE dettes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        utilisateur_id INTEGER NOT NULL,
+        compte_id INTEGER NOT NULL,
+        nom TEXT NOT NULL,
+        type TEXT NOT NULL,
+        montant_initial REAL NOT NULL,
+        solde_restant REAL NOT NULL,
+        date_creation DATETIME DEFAULT CURRENT_TIMESTAMP,
+        date_echeance DATETIME,
+        note TEXT,
+        statut TEXT DEFAULT 'en_cours',
+        actif INTEGER DEFAULT 1,
+        FOREIGN KEY (utilisateur_id) REFERENCES utilisateurs(id) ON DELETE CASCADE,
+        FOREIGN KEY (compte_id) REFERENCES comptes(id) ON DELETE CASCADE
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE paiements_dettes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        dette_id INTEGER NOT NULL,
+        transaction_id INTEGER,
+        montant REAL NOT NULL,
+        date_paiement DATETIME NOT NULL,
+        date_creation DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (dette_id) REFERENCES dettes(id) ON DELETE CASCADE,
+        FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE SET NULL
+      )
+    ''');
+
+    await db.execute('''
       CREATE TABLE paiements_factures (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         facture_id INTEGER NOT NULL,
@@ -320,6 +352,9 @@ class AppDatabase {
     await db.execute('CREATE INDEX idx_categories_type ON categories(type)');
     await db.execute('CREATE INDEX idx_budgets_periode ON budgets(mois, annee)');
     await db.execute('CREATE INDEX idx_budgets_categorie ON budgets(categorie_id)');
+    await db.execute('CREATE INDEX idx_dettes_compte ON dettes(compte_id)');
+    await db.execute('CREATE INDEX idx_dettes_type ON dettes(type)');
+    await db.execute('CREATE INDEX idx_paiements_dettes_dette ON paiements_dettes(dette_id)');
     await db.execute('CREATE INDEX idx_objectifs_statut ON objectifs_epargne(statut)');
     await db.execute('CREATE INDEX idx_factures_prochaine_echeance ON factures_recurrentes(prochaine_echeance)');
     await db.execute('CREATE INDEX idx_notifications_lue ON notifications(lue)');
@@ -408,6 +443,41 @@ class AppDatabase {
   Future<void> _runMigrations(Database db, int oldVersion, int newVersion) async {
     if (oldVersion < 2) {
       await db.execute('ALTER TABLE categories ADD COLUMN archived INTEGER DEFAULT 0');
+    }
+    if (oldVersion < 3) {
+      await db.execute('''
+        CREATE TABLE dettes (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          utilisateur_id INTEGER NOT NULL,
+          compte_id INTEGER NOT NULL,
+          nom TEXT NOT NULL,
+          type TEXT NOT NULL,
+          montant_initial REAL NOT NULL,
+          solde_restant REAL NOT NULL,
+          date_creation DATETIME DEFAULT CURRENT_TIMESTAMP,
+          date_echeance DATETIME,
+          note TEXT,
+          statut TEXT DEFAULT 'en_cours',
+          actif INTEGER DEFAULT 1,
+          FOREIGN KEY (utilisateur_id) REFERENCES utilisateurs(id) ON DELETE CASCADE,
+          FOREIGN KEY (compte_id) REFERENCES comptes(id) ON DELETE CASCADE
+        )
+      ''');
+      await db.execute('''
+        CREATE TABLE paiements_dettes (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          dette_id INTEGER NOT NULL,
+          transaction_id INTEGER,
+          montant REAL NOT NULL,
+          date_paiement DATETIME NOT NULL,
+          date_creation DATETIME DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (dette_id) REFERENCES dettes(id) ON DELETE CASCADE,
+          FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE SET NULL
+        )
+      ''');
+      await db.execute('CREATE INDEX idx_dettes_compte ON dettes(compte_id)');
+      await db.execute('CREATE INDEX idx_dettes_type ON dettes(type)');
+      await db.execute('CREATE INDEX idx_paiements_dettes_dette ON paiements_dettes(dette_id)');
     }
   }
 
